@@ -1,0 +1,1208 @@
+---
+title: "EEG_Sleep Figures"
+author: "Stoyo Karamihalev"
+output:
+  html_document:
+    code_folding: hide
+    css: style.css
+    df_print: paged
+    highlight: haddock
+    theme: cosmo
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+editor_options:
+  chunk_output_type: console
+---
+```{r setup, include=F}
+knitr::opts_chunk$set(fig.width = 7, fig.height = 4, fig.align = 'center', 
+                      message = F, echo = T, warning = F) 
+
+library(tidyverse)
+libraries = c("ggthemes", "R.matlab", "gridExtra", 'data.table', 'extrafont', 'broom', 
+              'tidyr', 'plyr', 'dplyr')
+lapply(libraries, require, character.only = TRUE)
+
+library(nlme)
+library(lmPerm)
+library(cowplot)
+
+# setwd('notebooks/')
+
+obj = readRDS('../objects/EEG_sleep.Rds')
+rankColors4 = c('#F26A21', '#BBC0A4', '#BADAEE', '#4FB2DD')
+theme_set(obj$theme)
+
+options(scipen=999)
+set.seed(42)
+
+saveFigures = F
+```
+
+
+# Figure 1
+
+## Hypnogram
+
+Representative hypnogram from Group 2, Day 4
+
+***
+
+```{r}
+v = subset(obj$vigilance, Day == 4 & GroupNumber == 2 & eTime <= 240)
+
+v$MouseID = as.numeric(mapvalues(v$MouseNumber, obj$mice$MouseNumber, obj$mice$MouseID))
+v$vigilance  = mapvalues(v$vigilance, c('awake', 'nrem', 'rem'), c('  Awake  ', '  Non-REM  ', '  REM  '))
+
+# Group hypnogram
+ggplot(v, aes(x = eTime, y = MouseID, fill = vigilance)) +
+  geom_segment(aes(
+    x = min(eTime), y = MouseID, xend = max(eTime), yend = MouseID), col = 'grey90', show.legend = F, size = 0.5) +
+  geom_tile(alpha = 1, aes(col = vigilance)) +
+  scale_fill_manual(values = obj$sleepColors) +
+  scale_color_manual(values = obj$sleepColors) +
+  scale_x_continuous(limits = c(0,240), breaks = c(0, 60, 120, 180, 240), expand = c(0,4)) +
+  scale_y_reverse(breaks = 1:4, expand = c(0,0)) +
+  facet_wrap(~Light, ncol = 1) +
+  xlab('Time [min]') + ylab('Mouse') + obj$theme +
+  theme(plot.title = element_text(hjust = 0.5, size = 13), 
+                      panel.border = element_blank(),
+                      legend.title = element_blank(), 
+                      legend.text = element_text(size = 9),
+                      legend.position = 'top', legend.direction = 'horizontal')
+
+if(saveFigures) {ggsave('../figures/1D_Group_hypnogram.eps', width = 5.5, height = 3.5, dpi = 1200)}
+# embed_fonts('papers/sleep/figures/Group_hypnogram.pdf')
+```
+
+***
+
+## 1E
+
+Subsetting vigilance data
+
+- remove recordings that failed visual quality inspection (Exclude == F)
+
+- remove recordings from Day 1 (habituation: Day > 1)
+
+- cut time down to 240 min - the quality of recordings drops after 4h due to battery life (eTime <= 240)
+
+- exclude recording 7 (in-between dark/light phase recording)
+
+```{r}
+v = subset(obj$vigilance, Recording %in% c(3, 6, 8:15) & Exclude == F & eTime <= 240)
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3))
+
+v$MouseID = as.numeric(mapvalues(v$MouseNumber, obj$mice$MouseNumber, obj$mice$MouseID))
+v$vigilance = as.numeric(mapvalues(v$vigilance, c('awake', 'nrem', 'rem'), c(1, 2, 3)))
+```
+
+Compute pairwise correlations
+
+- sleep states are treated as awake or asleep (REM + NREM)
+
+- computes all pairwise correlations (Pearson) between and within groups
+
+```{r}
+source('code/pairwiseCorrelations.R')
+dat = v %>% group_by(Recording, Day, Light) %>% nest()  
+dat = dat %>% mutate(
+  Correlation = map(data, pairwiseCorrelations)
+) %>% dplyr::select(-data) %>% unnest()
+
+dat$Stage = 'Baseline'
+dat$Stage[dat$Day %in% c(6, 8, 10, 12)] = 'Stress'
+
+# Fix this! 
+dat = subset(dat, !is.na(GroupType))
+
+dat = dat %>% group_by(pair, Light, GroupType, Stage) %>%
+  dplyr::summarize(Correlation = mean(Correlation, na.rm = T))
+```
+
+### Plot
+```{r, fig.width = 4.5, fig.height = 3.5}
+darkLightColors = c('grey', '#4fb0dc')
+darkLightColorsFill = c('grey90', '#99cae8')
+
+dat$GroupType = factor(dat$GroupType, levels = c('different', 'same'))
+dat$Group = mapvalues(dat$GroupType, levels(dat$GroupType), c('out-group', 'in-group'))
+dat$Stage = factor(dat$Stage, levels = c('Baseline', 'Stress'))
+
+ggplot(dat, aes(x = Stage, y = Correlation, col = Group, fill = Group)) +
+  geom_hline(yintercept = 0, col = 'grey', lty = 'dashed') +
+  geom_boxplot(width = 0.7, alpha = 1) +
+  geom_point(size = 2, position = position_dodge(0.7)) +
+  # scale_x_discrete(expand = c(0.5,0.5)) +
+  scale_fill_manual(values = darkLightColorsFill, name = 'Probability Type:') +
+  scale_color_manual(values = darkLightColors, name = 'Probability Type:') +
+  labs(x = '', y = 'Pairwise Correlation of Sleep States') +
+  facet_wrap(~ Light) +
+  obj$theme + theme(legend.position = 'top', legend.title = element_blank())
+
+if(saveFigures) {ggsave('../figures/1E_SleepCorrelation_BaselineStress.eps', width = 4.5, height = 3.5, dpi = 1200)}
+# summary(aov(Correlation ~ GroupType * Stage + Light + Error(as.factor(pair)), dat ))
+```
+
+### Stats
+
+Summary:
+```{r}
+dat %>% group_by(GroupType, Light, Stage) %>% 
+  dplyr::summarize(
+    n = n(), 
+    M = mean(Correlation, na.rm = T), 
+    sd = sd(Correlation, na.rm = T)
+  )
+```
+
+Unique pairs:
+```{r}
+length(unique(dat$pair))
+```
+
+
+#### Shapiro-Wilk test
+
+```{r}
+dat %>% group_by(GroupType, Light, Stage) %>% nest() %>% 
+  mutate(SW = map(data, function(d) shapiro.test(d$Correlation)), 
+         tSW = map(SW, broom::tidy)) %>% select(-data, -SW) %>% unnest()
+```
+
+> Normality is not violated in any group
+
+QQ-plots
+```{r, warning=F, fig.width=7, fig.height = 5}
+ggplot(dat, aes(sample = Correlation, fill = GroupType)) + 
+  stat_qq(size = 2, pch = 21, show.legend = T) + stat_qq_line(lty = 2) + 
+  scale_fill_manual(values = darkLightColorsFill, name = 'Pair Type:') +
+  facet_grid(Light ~ Stage) 
+```
+
+#### Levene's Test
+```{r}
+knitr::kable(car::leveneTest(Correlation ~ GroupType * Light * Stage, dat))
+```
+
+> Groupwise variances are heteroscedastic 
+
+- Probably driven by the sample size differences
+
+#### Test
+
+```{r, warning=F, message = F}
+# d = subset(dat, Stage == 'Baseline' & Light == 'Dark')
+# d = subset(dat, Stage == 'Baseline' )
+m = aovp(Correlation ~ GroupType*Light*Stage + Error(as.factor(pair)), dat)
+knitr::kable(tidy(m))
+```
+
+Summary
+```{r}
+summary(m)
+```
+
+***
+
+## 1F
+
+> "PseudoCausality" over time
+
+Subset data
+
+- only consider bouts with a duration under 40 min
+
+```{r}
+v = subset(obj$vigilance, Exclude == F & Recording %in% c(6) & eTime <= 240)
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3)) 
+
+# subset duration
+v = subset(v, duration < 40)
+```
+
+Run pseudo-causality function
+```{r}
+source('code/pseudoCausality.R')
+x = pseudoCausality(v, timePeriods = 1:5, verbose = F)
+obj$pseudoCausality = x
+```
+
+Summarize
+```{r}
+s = obj$pseudoCausality %>% group_by(MouseNumber, GroupType, timePeriod, nMice) %>%
+  dplyr::summarize(P = mean(P.atLeastOne, na.rm = T))
+
+ss = s %>% group_by(GroupType, timePeriod, nMice) %>%
+  dplyr::summarize(M = mean(P), se = sd(P)/sqrt(n()))
+ss$Time = ss$timePeriod * 4
+```
+
+### Plot
+
+***
+```{r, fig.width = 4.7, fig.height = 3.2}
+darkLightColors = c('grey', '#4fb0dc')
+ss$GroupType = factor(ss$GroupType, levels = c('different', 'same'))
+ss$Group = mapvalues(ss$GroupType, levels(ss$GroupType), c('expected', 'true'))
+ggplot(ss, aes(x = Time, y = M, fill = Group, col = Group)) +
+  geom_errorbar(aes(ymin = M - se, ymax = M + se), width = 0.1, size = 0.55, alpha = 1) +
+  geom_line(data = ss[ss$Group == 'true',],position = position_dodge(0)) +
+  geom_line(data = ss[ss$Group == 'expected',],position = position_dodge(0), lty = 'dashed') +
+  geom_point(size = 1.8) +
+  scale_fill_manual(values = darkLightColors, name = 'Probability Type:') +
+  scale_color_manual(values = darkLightColors, name = 'Probability Type:') +
+  scale_x_continuous(limits = c(4, 20), breaks = seq(4, 20, 4)) +
+  facet_wrap(~nMice) +
+  xlab('Time [sec]') + ylab('Probability of +1 Awakening') +
+  obj$theme + theme(legend.position = c(0.17,0.82), legend.title = element_text(size = 10)) 
+
+if(saveFigures) {ggsave('../figures/1F_pseudoCausalityOverTime.eps', width = 4.7, height = 3.2, dpi = 1200)}
+# ggsave('../figures/1F_pseudoCausalityOverTime.eps', width = 4.7, height = 3.2, dpi = 1200)
+# # embed_fonts('papers/sleep/figures/pseudoCausalityOverTime.pdf')
+```
+
+***
+
+### Stats
+
+Summary:
+```{r}
+s %>% group_by(GroupType, nMice, timePeriod) %>% 
+  dplyr::summarize(
+    n = n(), 
+    M = mean(P, na.rm = T), 
+    sd = sd(P, na.rm = T)
+  )
+```
+
+
+```{r}
+length(unique(s$MouseNumber))
+```
+
+
+#### Shapiro-Wilk test 
+```{r}
+s %>% 
+  group_by(GroupType, nMice, timePeriod) %>% nest() %>% 
+  mutate(SW = map(data, function(d) shapiro.test(d$P)), 
+         tSW = map(SW, broom::tidy)) %>% select(-data, -SW) %>% unnest()
+```
+
+> Normality is violated in nMice == 1
+
+#### Levene's Test
+```{r}
+knitr::kable(car::leveneTest(P ~ GroupType * as.factor(nMice) * as.factor(timePeriod), s))
+```
+
+> Groupwise variances are heteroscedastic 
+
+> Mann-Whitney-Wilcoxon Test for time 1
+
+Awake mice: 1
+```{r, warning=F, message = F}
+ss = subset(s, timePeriod == min(s$timePeriod) & nMice == 1)
+m = wilcox.test(P ~ GroupType, ss)
+knitr::kable(tidy(m))
+```
+
+Awake mice: 3
+```{r, warning=F, message = F}
+ss = subset(s, timePeriod == min(s$timePeriod) & nMice == 3)
+m = wilcox.test(P ~ GroupType, ss)
+knitr::kable(tidy(m))
+```
+
+> lmPerm
+
+Repeated-measures:
+
+```{r}
+m = aovp(P ~ GroupType*nMice + as.factor(timePeriod) + Error(as.factor(MouseNumber)), s)
+knitr::kable(tidy(m))
+summary(m)
+```
+
+
+Awake mice: 1
+```{r, warning=F, message = F}
+# ss = subset(s, timePeriod == min(s$timePeriod) & nMice == 1)
+ss = subset(s, nMice == 1)
+m = aovp(P ~ GroupType + as.factor(timePeriod) + Error(as.factor(MouseNumber)), ss)
+knitr::kable(tidy(m))
+```
+
+Summary
+```{r}
+summary(m)
+```
+
+Awake mice: 2
+```{r, warning=F, message = F}
+ss = subset(s, nMice == 2)
+m = aovp(P ~ GroupType + as.factor(timePeriod) + Error(as.factor(MouseNumber)), ss)
+knitr::kable(tidy(m))
+```
+
+Summary
+```{r}
+summary(m)
+```
+
+Awake mice: 3
+```{r, warning=F, message = F}
+ss = subset(s, nMice == 3)
+m = aovp(P ~ GroupType + as.factor(timePeriod) + Error(as.factor(MouseNumber)), ss)
+knitr::kable(tidy(m))
+```
+
+Summary
+```{r}
+summary(m)
+```
+
+***
+
+# Figure 2
+
+## 2A
+
+> Sleep Types [%] Stacked
+
+```{r}
+v = subset(obj$vigilance, eTime <= 240 & Exclude == F & Recording %in% c(3,6) & duration <= 80)
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3)) 
+
+v = left_join(v, subset(obj$mice, select = c('MouseNumber', 'MouseID')))
+
+s = v %>% group_by(MouseNumber, MouseID, GroupNumber, Light, Stage, Recording) %>% 
+  dplyr::summarize(
+    epochs = length(!is.na(vigilance)),
+    sleepEpochs = length(!is.na(vigilance[vigilance != 'awake'])),
+    n_bouts = length(unique(bout)),
+    fractionation = sum(newBout == T)/epochs,
+    awake = sum(vigilance == 'awake', na.rm = T)/epochs,
+    nrem = sum(vigilance == 'nrem', na.rm = T)/epochs,
+    rem = sum(vigilance == 'rem', na.rm = T)/epochs
+  )
+p = subset(obj$profiles, Day == 1, select = c('MouseNumber', 'GroupNumber', 'CumNormDavidScore', 'DavidScoreRank'))
+p$GroupNumber = as.character(p$GroupNumber)
+
+s = melt(s, id.vars = c('MouseNumber', 'MouseID', 'GroupNumber', 'Light', 'Stage', 'Recording'))
+colnames(s)[(ncol(s) - 1) : ncol(s)] = c('sleepProp', 'value')
+s = left_join(s, p)
+
+s = subset(s, sleepProp %in% c('awake', 'nrem', 'rem'))
+
+ss = s %>% 
+  group_by(MouseNumber, MouseID, GroupNumber, sleepProp, CumNormDavidScore, DavidScoreRank, Light) %>% 
+  dplyr::summarize(se = sd(value, na.rm = T)/sqrt(n()), 
+            value = mean(value, na.rm = T)) %>% 
+  dplyr::mutate(value = value*100, se = se)
+
+ss$sleepProp = mapvalues(ss$sleepProp, from = c('awake', 'nrem', 'rem'), to = c('Awake', 'Non-REM', 'REM'))
+ss$sleepProp = factor(ss$sleepProp, levels = c('Non-REM', 'REM', 'Awake'))
+
+ss$Rank = mapvalues(ss$DavidScoreRank, 1:4,  c('alpha', 'beta', 'gamma', 'delta'))
+ss$Rank = factor(ss$Rank, levels = c('alpha', 'beta', 'gamma', 'delta'))
+ss$RankBinary = mapvalues(ss$DavidScoreRank, 1:4,  c('DOM', 'DOM', 'SUB', 'SUB'))
+ss$RankBinary = factor(ss$RankBinary, levels = c('SUB', 'DOM'))
+
+# adjust for group effects
+res = lapply(as.character(unique(ss$sleepProp)), function(prop) {
+  temp = subset(ss, sleepProp == prop)
+  temp = temp %>% arrange(Light)
+  # fit separate models to the Light and Dark phases
+  m1 = lm(value ~ as.factor(GroupNumber), temp[temp$Light == 'Dark',])
+  m2 = lm(value ~ as.factor(GroupNumber), temp[temp$Light == 'Light',])
+  temp$resid = c(as.numeric(m1$residuals), as.numeric(m2$residuals))
+  temp$groupIntercept = c(rep(m1$coefficient[1], length(m1$fitted.values)),
+                          rep(m2$coefficient[1], length(m2$fitted.values)))
+  temp$value_adjusted = temp$resid + temp$groupIntercept
+  return(temp)
+})
+ss = do.call('rbind', res)
+```
+
+```{r, fig.height = 5, fig.width = 5}
+ggplot(ss, aes(x = RankBinary, y = value, fill = RankBinary)) +
+  geom_boxplot() + geom_point() + facet_wrap(Light ~ sleepProp, scales = 'free_y') + 
+  theme(legend.position = 'none') +
+  ylab('Time [%]') + xlab('')
+```
+
+***
+
+```{r, fig.width = 2.5 , fig.height = 3.5}
+sleepColors = c('#B0D9D5', '#2c7fb8',  '#edf8b1')
+sss = ss %>% group_by(RankBinary, Light, sleepProp) %>%
+  dplyr::summarize(
+    se = sd(value_adjusted, na.rm = T)/sqrt(n()),
+    value_adjusted = mean(value_adjusted, na.rm = T)
+  )
+
+ggplot(sss, aes(x = RankBinary, y = value_adjusted, fill = sleepProp)) + 
+  geom_bar(position = 'stack', stat = 'identity') +
+  scale_fill_manual(values = c(sleepColors[2], sleepColors[3], sleepColors[1] )) +
+  scale_color_manual(values = c(sleepColors[2], sleepColors[3], sleepColors[1] )) +
+  facet_grid(~Light) + 
+  ylab('Time [%]') + xlab('') +
+  obj$theme + theme(legend.position = 'top', legend.title = element_blank(), 
+                    panel.border = element_blank())
+
+if(saveFigures) {ggsave('../figures/2A_Rank_x_SleepFractionsStacked.eps', width = 2.5 , height = 3.5, dpi = 1200)}
+```
+
+
+Number of individuals: 
+```{r}
+length(unique(ss$MouseNumber))
+```
+
+
+***
+
+## 2B 
+
+> REM [%] x Rank - Baseline 
+
+```{r}
+v = subset(obj$vigilance, eTime <= 240 & Exclude == F & Recording %in% c(3,6) & duration <= 80)
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3)) 
+
+v = left_join(v, subset(obj$mice, select = c('MouseNumber', 'MouseID')))
+
+s = v %>% group_by(MouseNumber, MouseID, GroupNumber, Light, Stage, Recording) %>% 
+  dplyr::summarize(
+    epochs = length(!is.na(vigilance)),
+    sleepEpochs = length(!is.na(vigilance[vigilance != 'awake'])),
+    n_bouts = length(unique(bout)),
+    fractionation = sum(newBout == T)/epochs,
+    awake = sum(vigilance == 'awake', na.rm = T)/epochs,
+    nrem = sum(vigilance == 'nrem', na.rm = T)/epochs,
+    rem = sum(vigilance == 'rem', na.rm = T)/epochs
+  )
+p = subset(obj$profiles, Day == 1, select = c('MouseNumber', 'GroupNumber', 'CumNormDavidScore', 'DavidScoreRank'))
+p$GroupNumber = as.character(p$GroupNumber)
+
+s = melt(s, id.vars = c('MouseNumber', 'MouseID', 'GroupNumber', 'Light', 'Stage', 'Recording'))
+colnames(s)[(ncol(s) - 1) : ncol(s)] = c('sleepProp', 'value')
+s = left_join(s, p)
+
+ss = s %>% 
+  group_by(MouseNumber, MouseID, GroupNumber, sleepProp, CumNormDavidScore, DavidScoreRank, Light) %>% 
+  dplyr::summarize(se = sd(value, na.rm = T)/sqrt(n()), value = mean(value, na.rm = T)) %>% 
+  dplyr::mutate(value = value, se = se)
+
+ss$sleepProp = mapvalues(ss$sleepProp, from = c('awake', 'nrem', 'rem'), to = c('Awake', 'Non-REM', 'REM'))
+
+ss$Rank = mapvalues(ss$DavidScoreRank, 1:4,  c('alpha', 'beta', 'gamma', 'delta'))
+ss$Rank = factor(ss$Rank, levels = c('alpha', 'beta', 'gamma', 'delta'))
+ss$RankBinary = mapvalues(ss$DavidScoreRank, 1:4,  c('DOM', 'DOM', 'SUB', 'SUB'))
+ss$RankBinary = factor(ss$RankBinary, levels = c('SUB', 'DOM'))
+
+sleep = 'REM'
+ss = subset(ss, sleepProp == sleep)
+
+# convert to percent
+ss$value = ss$value * 100
+
+# adjust for group
+ss = ss %>% arrange(Light)
+# fit separate models to the Light and Dark phases
+m1 = lm(value ~ as.factor(GroupNumber), ss[ss$Light == 'Dark',])
+m2 = lm(value ~ as.factor(GroupNumber), ss[ss$Light == 'Light',])
+ss$resid = c(as.numeric(m1$residuals), as.numeric(m2$residuals))
+ss$groupIntercept = c(rep(m1$coefficient[1], length(m1$fitted.values)), 
+                        rep(m2$coefficient[1], length(m2$fitted.values)))
+ss$value_adjusted = ss$resid + ss$groupIntercept
+```
+
+### Plot
+```{r, fig.width = 3.25, fig.height = 3.75}
+darkLightColorsFill = c('grey90', '#99cae8')
+p = ggplot(ss, aes(x = CumNormDavidScore, y = value_adjusted, fill = Rank, color = Rank)) +
+  geom_smooth(method = 'lm', se = F, col = 'grey', aes(group = 1), lty = 'dashed') +
+  geom_point(size = 2, position = position_dodge(0), col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('Dominance') + ylab(paste(sleep, '[%]')) +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', strip.text.y = element_blank(), 
+                    strip.text.x = element_blank(), strip.background = element_blank(),
+                    plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+p2 = ggplot(ss, aes(x = RankBinary, y = value_adjusted, fill = Rank)) +
+  geom_boxplot(width = 0.5, alpha = 1,  outlier.shape = NA, fill = 'grey90', color = 'grey') +
+  geom_point(size = 2, col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('') + ylab('') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', axis.text.y = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+legend_b <- plot_grid(get_legend(p + theme(legend.position="top", legend.title = element_blank())))
+bottom_row = plot_grid(p, p2, rel_widths = c(1.66, 1), ncol = 2)
+plot_grid(legend_b, bottom_row, ncol = 1, rel_heights = c(0.1, 1))
+
+if(saveFigures) {ggsave('../figures/2B_Rank_x_REM_percent.eps', width = 3.25, height = 3.75, dpi = 1200)}
+```
+
+### Stats
+
+Number of mice:
+```{r}
+length(unique(ss$MouseNumber))
+```
+
+Summary:
+```{r}
+ss %>% group_by(Light, RankBinary) %>% 
+  dplyr::summarize(
+    n = n(), 
+    M = mean(value, na.rm = T), 
+    sd = sd(value, na.rm = T)
+  )
+```
+
+#### Shapiro-Wilk test 
+
+```{r}
+ss %>% group_by(Light, RankBinary) %>% nest() %>% 
+  mutate(SW = map(data, function(d) shapiro.test(d$value)), 
+         tSW = map(SW, broom::tidy)) %>% select(-data, -SW) %>% unnest()
+```
+
+> Normality is not violated in any group
+
+#### Levene's Test
+```{r}
+knitr::kable(car::leveneTest(value ~ RankBinary * Light, ss))
+```
+
+> Groupwise variances are not heteroscedastic (although a trend exists)
+
+#### Continuous predictor
+```{r}
+library(nlme)
+ss$GroupNumber = as.factor(ss$GroupNumber)
+ss$MouseNumber = as.factor(ss$MouseNumber)
+ss$RankBinary = as.factor(ss$RankBinary)
+m = lme(value ~ CumNormDavidScore * Light,
+    random = ~1|GroupNumber/MouseNumber, data = ss, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+#### Binary predictor
+```{r}
+library(nlme)
+m = lme(value ~ RankBinary * Light,
+    random = ~1|GroupNumber/MouseNumber, data = ss, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+
+<!-- EMAtools::lme.dscore(m, ss, 'nlme') -->
+
+
+## 2C
+
+> SWA x Rank - Baseline 
+
+Load EEG FFT23:
+```{r}
+source('code/loadEEG_sleep.R')
+source('code/eegFiles.R')
+recs = c(3, 6)
+
+# Load EEG files - FFT-transformed, by epoch
+obj = eegFiles(obj, dir = '../telemetry/EEG_by_epoch/')
+
+# One problematic file removed: TMC48_8-4_050559_FFT.txt.Rds
+e = loadEEG_sleep(obj, mice = 'all', recordings = recs, slowWaveOnly = T,
+                  dir = '../telemetry/EEG_by_epoch/', channels = 'FFT23', verbose = F)
+
+```
+
+```{r, fig.height = 8}
+e = subset(e, !is.na(Recording))
+e = subset(e, !(MouseNumber == 'TMC36' & Recording == 3)) # strong outlier!
+qc = as.data.frame(e %>% group_by(MouseNumber, Recording) %>% 
+                     dplyr::summarize(
+                       zR = unique(zeroRowFraction),
+                       oR = unique(outlierRowFraction), 
+                       ttl = unique(zeroRowFraction) + unique(outlierRowFraction)))
+ggplot(qc, aes(x = MouseNumber, y = oR, fill = MouseNumber)) +
+  geom_point(pch = 21, size = 2) +
+  facet_wrap(~Recording) + coord_flip() + theme(legend.position = 'none')
+
+e = subset(e, !(MouseNumber == 'TMC48' & Recording == 3)) # outlier based on artifact rows
+```
+
+
+```{r}
+v = subset(obj$vigilance, Recording %in% recs, select = c('MouseNumber', 'Recording', 'Exclude'))
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3)) 
+
+v = v[!duplicated(v),]
+idx = lapply(1:nrow(e), function(r) {
+  (e$MouseNumber[r] %in% v$MouseNumber) & (e$Recording[r] %in% v$Recording[v$MouseNumber == e$MouseNumber[r]])
+  })
+idx = do.call('c', idx)
+sum(idx)/length(idx)
+
+e = e[idx,]
+
+v = subset(obj$vigilance, Recording %in% recs)
+v$Time = as.POSIXct(round(v$Time, units = 'sec'))
+
+ee = left_join(e, v[,c('Recording', 'Time', 'MouseNumber', 'vigilance', 'duration', 'bout')])
+ee = subset(ee, vigilance == 'nrem')
+ee = subset(ee, duration <= 80)
+# hist(ee$duration, 100)
+```
+
+```{r}
+s = subset(ee)
+p = subset(obj$profiles, Day == 1, select = c('MouseNumber', 'GroupNumber', 'CumNormDavidScore', 'DavidScoreRank'))
+s = left_join(s, p)
+s$Rank = mapvalues(s$DavidScoreRank, 1:4,  c('alpha', 'beta', 'gamma', 'delta'))
+s$Rank = factor(s$Rank, levels = c('alpha', 'beta', 'gamma', 'delta'))
+s$RankBinary = mapvalues(s$DavidScoreRank, 1:4,  c('DOM', 'DOM', 'SUB', 'SUB'))
+s$RankBinary = factor(s$RankBinary, levels = c('SUB', 'DOM'))
+
+s = s %>% dplyr::filter(!is.na(Light)) %>% 
+  group_by(CumNormDavidScore, MouseNumber, GroupNumber, Rank, RankBinary, Light, Recording) %>%
+  dplyr::summarize(slowWave = mean(slowWave, na.rm = T))
+
+# adjust for group
+s = s %>% arrange(Light)
+s$GroupNumber = as.factor(s$GroupNumber)
+# fit separate models to the Light and Dark phases
+m1 = lm(slowWave ~ as.factor(GroupNumber), s[s$Light == 'Dark',])
+m2 = lm(slowWave ~ as.factor(GroupNumber), s[s$Light == 'Light',])
+s$resid = c(as.numeric(m1$residuals), as.numeric(m2$residuals))
+s$groupIntercept = c(rep(m1$coefficient[1], length(m1$fitted.values)), 
+                      rep(m2$coefficient[1], length(m2$fitted.values)))
+s$value_adjusted = s$resid + s$groupIntercept
+s$value = s[['slowWave']]
+```
+
+### Plot
+```{r, fig.width = 3.5 , fig.height = 3.75}
+p = ggplot(s, aes(x = CumNormDavidScore, y = value_adjusted, fill = Rank, color = Rank)) +
+  geom_smooth(method = 'lm', se = F, col = 'grey', aes(group = 1), lty = 'dashed') +
+  geom_point(size = 2, position = position_dodge(0), col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('Dominance') + ylab('Mean Slow-Wave Power (0.5 - 4 Hz)') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', strip.text.y = element_blank(), 
+                    strip.text.x = element_blank(), strip.background = element_blank(),
+                    plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+p2 = ggplot(s, aes(x = RankBinary, y = value_adjusted, fill = Rank)) +
+  geom_boxplot(width = 0.5, alpha = 1,  outlier.shape = NA, fill = 'grey90', color = 'grey') +
+  geom_point(size = 2, col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('') + ylab('') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', axis.text.y = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+legend_b <- plot_grid(get_legend(p + theme(legend.position="top", legend.title = element_blank())))
+bottom_row = plot_grid(p, p2, rel_widths = c(1.66, 1), ncol = 2)
+plot_grid(legend_b, bottom_row, ncol = 1, rel_heights = c(0.1, 1))
+
+if(saveFigures) {ggsave('../figures/2C_Rank_x_SlowWave.eps', width = 3.5, height = 3.75, dpi = 1200)}
+```
+
+### Stats
+
+Number of mice:
+```{r}
+length(unique(s$MouseNumber))
+```
+
+Summary:
+```{r}
+s %>% group_by(Light, RankBinary) %>% 
+  dplyr::summarize(
+    n = n(), 
+    M = mean(value, na.rm = T), 
+    sd = sd(value, na.rm = T)
+  )
+```
+
+
+#### Shapiro-Wilk test 
+
+```{r}
+s %>% group_by(Light, RankBinary) %>% nest() %>% 
+  mutate(SW = map(data, function(d) shapiro.test(d$value)), 
+         tSW = map(SW, broom::tidy)) %>% select(-data, -SW) %>% unnest()
+```
+
+> Normality is not violated in any group
+
+#### Levene's Test
+```{r}
+knitr::kable(car::leveneTest(value ~ RankBinary * Light, s))
+```
+
+> Groupwise variances are not heteroscedastic 
+
+#### Continuous predictor
+```{r}
+library(nlme)
+s$GroupNumber = as.factor(s$GroupNumber)
+s$MouseNumber = as.factor(s$MouseNumber)
+s$RankBinary = as.factor(s$RankBinary)
+m = lme(value ~ CumNormDavidScore * Light,
+    random = ~1|GroupNumber/MouseNumber, data = s, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+#### Binary predictor
+```{r}
+library(nlme)
+m = lme(value ~ RankBinary * Light,
+    random = ~1|GroupNumber/MouseNumber, data = s, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+
+
+
+### Bonus
+#### Min SWA x Rank 
+
+- Why is the minimum slow-wave activity that much lower / close to zero in subordinates during the light phase?
+
+```{r}
+s = subset(ee)
+p = subset(obj$profiles, Day == 1, select = c('MouseNumber', 'GroupNumber', 'CumNormDavidScore', 'DavidScoreRank'))
+s = left_join(s, p)
+s$Rank = mapvalues(s$DavidScoreRank, 1:4,  c('alpha', 'beta', 'gamma', 'delta'))
+s$Rank = factor(s$Rank, levels = c('alpha', 'beta', 'gamma', 'delta'))
+s$RankBinary = mapvalues(s$DavidScoreRank, 1:4,  c('DOM', 'DOM', 'SUB', 'SUB'))
+s$RankBinary = factor(s$RankBinary, levels = c('SUB', 'DOM'))
+
+s = s %>% dplyr::filter(!is.na(Light)) %>% 
+  group_by(CumNormDavidScore, MouseNumber, GroupNumber, Rank, RankBinary, Light, Recording) %>%
+  dplyr::summarize(slowWave = min(slowWave, na.rm = T))
+
+# adjust for group
+s = s %>% arrange(Light)
+s$GroupNumber = as.factor(s$GroupNumber)
+# fit separate models to the Light and Dark phases
+m1 = lm(slowWave ~ as.factor(GroupNumber), s[s$Light == 'Dark',])
+m2 = lm(slowWave ~ as.factor(GroupNumber), s[s$Light == 'Light',])
+s$resid = c(as.numeric(m1$residuals), as.numeric(m2$residuals))
+s$groupIntercept = c(rep(m1$coefficient[1], length(m1$fitted.values)), 
+                      rep(m2$coefficient[1], length(m2$fitted.values)))
+s$value_adjusted = s$resid + s$groupIntercept
+s$value = s[['slowWave']]
+```
+
+```{r, fig.width = 3.5 , fig.height = 3.75}
+p = ggplot(s, aes(x = CumNormDavidScore, y = value_adjusted, fill = Rank, color = Rank)) +
+  geom_smooth(method = 'lm', se = F, col = 'grey', aes(group = 1), lty = 'dashed') +
+  geom_point(size = 2, position = position_dodge(0), col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('Dominance') + ylab('Mean Slow-Wave Power (0.5 - 4 Hz)') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', strip.text.y = element_blank(), 
+                    strip.text.x = element_blank(), strip.background = element_blank(),
+                    plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+p2 = ggplot(s, aes(x = RankBinary, y = value_adjusted, fill = Rank)) +
+  geom_boxplot(width = 0.5, alpha = 1,  outlier.shape = NA, fill = 'grey90', color = 'grey') +
+  geom_point(size = 2, col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('') + ylab('') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', axis.text.y = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+legend_b <- plot_grid(get_legend(p + theme(legend.position="top", legend.title = element_blank())))
+bottom_row = plot_grid(p, p2, rel_widths = c(1.66, 1), ncol = 2)
+plot_grid(legend_b, bottom_row, ncol = 1, rel_heights = c(0.1, 1))
+# ggsave(filename = 'papers/sleep/figures/Rank_x_SlowWave.eps', width = 3.5 , height = 3.75, dpi = 1200)
+```
+
+
+
+
+## 2D
+
+> Fragmentation x Rank - baseline
+
+```{r}
+props = c('CumNormDavidScore', 'DavidScoreRank')
+v = subset(obj$vigilance, eTime <= 240 & Exclude == F & Recording %in% c(3, 6) & duration <= 80)
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3)) 
+
+v = left_join(v, subset(obj$mice, select = c('MouseNumber', 'MouseID')))
+s = v %>% group_by(MouseNumber, MouseID, GroupNumber, Light, Stage, Recording) %>% 
+  dplyr::summarize(
+    epochs = length(!is.na(vigilance)),
+    sleepEpochs = length(!is.na(vigilance[vigilance != 'awake'])),
+    n_bouts = length(unique(bout)),
+    sleep = sum(vigilance %in% c('nrem', 'rem'))/epochs,
+    N_awake = sum(vigilance == 'awake' & newBout == T, na.rm = T),
+    fragmentation = N_awake*sleep
+  )
+p = subset(obj$profiles, Day == 1, select = c('MouseNumber', 'GroupNumber', 'CumNormDavidScore', 'DavidScoreRank'))
+p$GroupNumber = as.character(p$GroupNumber)
+
+s = melt(s, id.vars = c('MouseNumber', 'MouseID', 'GroupNumber', 'Light', 'Stage', 'Recording'))
+colnames(s)[(ncol(s) - 1) : ncol(s)] = c('sleepProp', 'value')
+s = left_join(s, p)
+
+```
+
+
+```{r}
+ss = s %>% 
+  group_by(MouseNumber, MouseID, GroupNumber, sleepProp, CumNormDavidScore, DavidScoreRank, Light) %>% 
+  dplyr::summarize(se = sd(value, na.rm = T)/sqrt(n()), value = mean(value, na.rm = T)) %>% 
+  dplyr::mutate(value = value, se = se)
+
+ss$sleepProp = mapvalues(ss$sleepProp, from = c('awake', 'nrem', 'rem'), to = c('awake', 'non-REM', 'REM'))
+ss$Rank = mapvalues(ss$DavidScoreRank, 1:4,  c('alpha', 'beta', 'gamma', 'delta'))
+ss$Rank = factor(ss$Rank, levels = c('alpha', 'beta', 'gamma', 'delta'))
+ss$RankBinary = mapvalues(ss$DavidScoreRank, 1:4,  c('DOM', 'DOM', 'SUB', 'SUB'))
+ss$RankBinary = factor(ss$RankBinary, levels = c('SUB', 'DOM'))
+
+sleep = 'fragmentation'
+
+# adjust for group
+ss = subset(ss, sleepProp == sleep)
+ss$GroupNumber = as.factor(ss$GroupNumber)
+ss = ss %>% arrange(Light)
+# fit separate models to the Light and Dark phases
+m1 = lm(value ~ as.factor(GroupNumber), ss[ss$Light == 'Dark',])
+m2 = lm(value ~ as.factor(GroupNumber), ss[ss$Light == 'Light',])
+ss$resid = c(as.numeric(m1$residuals), as.numeric(m2$residuals))
+ss$groupIntercept = c(rep(m1$coefficient[1], length(m1$fitted.values)), 
+                      rep(m2$coefficient[1], length(m2$fitted.values)))
+ss$value_adjusted = ss$resid + ss$groupIntercept
+```
+
+### Plot
+```{r, fig.width = 3.5 , fig.height = 3.75}
+p = ggplot(ss, aes(x = CumNormDavidScore, y = value_adjusted, fill = Rank, color = Rank)) +
+  geom_smooth(method = 'lm', se = F, col = 'grey', aes(group = 1), lty = 'dashed') +
+  geom_point(size = 2, position = position_dodge(0), col = 'grey20', pch = 21) +
+  # geom_text(aes(label = MouseNumber)) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('Dominance') + ylab('# of Awakenings x Sleep [%]') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', strip.text.y = element_blank(), 
+                    strip.text.x = element_blank(), strip.background = element_blank(),
+                    plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+p2 = ggplot(ss, aes(x = RankBinary, y = value_adjusted, fill = Rank)) +
+  geom_boxplot(width = 0.5, alpha = 1,  outlier.shape = NA, fill = 'grey90', color = 'grey') +
+  geom_point(size = 2, col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('') + ylab('') +
+  facet_grid(Light~.) +
+  obj$theme + theme(legend.position = 'none', axis.text.y = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+legend_b <- plot_grid(get_legend(p + theme(legend.position="top", legend.title = element_blank())))
+bottom_row = plot_grid(p, p2, rel_widths = c(1.66, 1), ncol = 2)
+plot_grid(legend_b, bottom_row, ncol = 1, rel_heights = c(0.1, 1))
+
+if(saveFigures) {ggsave('../figures/2D_Rank_x_Fragmentation.eps', width = 3.5, height = 3.75, dpi = 1200)}
+# embed_fonts('papers/sleep/figures/Rank_x_Fragmentation.pdf')
+```
+
+### Stats
+
+Number of mice:
+```{r}
+length(unique(ss$MouseNumber))
+```
+
+Summary:
+```{r}
+ss %>% group_by(Light, RankBinary) %>% 
+  dplyr::summarize(
+    n = n(), 
+    M = mean(value, na.rm = T), 
+    sd = sd(value, na.rm = T)
+  )
+```
+
+#### Shapiro-Wilk test 
+```{r}
+ss %>% group_by(Light, RankBinary) %>% nest() %>% 
+  mutate(SW = map(data, function(d) shapiro.test(d$value)), 
+         tSW = map(SW, broom::tidy)) %>% select(-data, -SW) %>% unnest()
+```
+
+> Normality is not violated in any group
+
+#### Levene's Test
+```{r}
+knitr::kable(car::leveneTest(value ~ RankBinary * Light, ss))
+```
+
+> Groupwise variances are not heteroscedastic (although a trend exists)
+
+#### Continuous predictor
+```{r}
+library(nlme)
+ss$GroupNumber = as.factor(ss$GroupNumber)
+ss$MouseNumber = as.factor(ss$MouseNumber)
+ss$RankBinary = as.factor(ss$RankBinary)
+m = lme(value ~ CumNormDavidScore * Light,
+    random = ~1|GroupNumber/MouseNumber, data = ss, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+#### Binary predictor
+```{r}
+library(nlme)
+m = lme(value ~ RankBinary * Light,
+    random = ~1|GroupNumber/MouseNumber, data = ss, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+Posthoc - Light:
+
+```{r}
+library(nlme)
+m = lme(value ~ RankBinary,
+    random = ~1|GroupNumber/MouseNumber, data = subset(ss, Light == 'Light'), # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+Posthoc - Dark:
+
+```{r}
+library(nlme)
+m = lme(value ~ RankBinary,
+    random = ~1|GroupNumber/MouseNumber, data = subset(ss, Light == 'Dark'), # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+
+
+## 2E 
+
+> REM Duration x Rank x Stage
+
+```{r}
+v = subset(obj$vigilance, eTime <= 240 & Exclude == F & Recording > 2 & !Recording %in% c(4, 5, 7) & duration <= 80)
+
+v = subset(v, !MouseNumber == 'TMC47')
+v = subset(v, !(MouseNumber == 'TMC36' & Recording == 3)) 
+v = left_join(v, subset(obj$mice, select = c('MouseNumber', 'MouseID')))
+
+s = v %>% group_by(MouseNumber, MouseID, GroupNumber, Light, Stage, Recording) %>% 
+  dplyr::summarize(
+    epochs = length(!is.na(vigilance)),
+    sleepEpochs = length(!is.na(vigilance[vigilance != 'awake'])),
+    n_bouts = length(unique(bout)),
+    # fractionation = sum(newBout == T)/epochs
+    sleep = sum(vigilance %in% c('nrem', 'rem'))/epochs,
+    rem = sum(vigilance %in% c('rem'))/epochs,
+    N_awake = sum(vigilance == 'awake' & newBout == T, na.rm = T),
+    N_rem = sum(vigilance == 'rem' & newBout == T, na.rm = T),
+    mD_rem = median(duration[vigilance == 'rem' & newBout], na.rm = T),
+    meanD_rem = mean(duration[vigilance == 'rem' & newBout], na.rm = T),
+    mD_nrem = median(duration[vigilance == 'nrem' & newBout], na.rm = T),
+    mD_awake = median(duration[vigilance == 'awake' & newBout], na.rm = T), 
+    fragmentation = N_awake*sleep
+  )
+
+p = subset(obj$profiles, Day == 1, select = c('MouseNumber', 'GroupNumber', 'CumNormDavidScore', 'DavidScoreRank'))
+p$GroupNumber = as.character(p$GroupNumber)
+
+s = melt(s, id.vars = c('MouseNumber', 'MouseID', 'GroupNumber', 'Light', 'Stage', 'Recording'))
+colnames(s)[(ncol(s) - 1) : ncol(s)] = c('sleepProp', 'value')
+s = left_join(s, p)
+
+ss = s %>% 
+  group_by(MouseNumber, MouseID, Stage, GroupNumber, sleepProp, CumNormDavidScore, DavidScoreRank, Light) %>% 
+  dplyr::summarize(se = sd(value, na.rm = T)/sqrt(n()), value = mean(value, na.rm = T)) %>% 
+  dplyr::mutate(value = value, se = se)
+
+ss$Rank = mapvalues(ss$DavidScoreRank, 1:4,  c('alpha', 'beta', 'gamma', 'delta'))
+ss$Rank = factor(ss$Rank, levels = c('alpha', 'beta', 'gamma', 'delta'))
+ss$RankBinary = mapvalues(ss$DavidScoreRank, 1:4,  c('DOM', 'DOM', 'SUB', 'SUB'))
+ss$RankBinary = factor(ss$RankBinary, levels = c('SUB', 'DOM'))
+
+ss$Stage = mapvalues(ss$Stage, c('Secondary', 'Stress'), c('Indirect Stress', 'Direct Stress'))
+
+sleep = 'meanD_rem'
+ss = subset(ss, sleepProp == sleep & !is.na(value))
+
+# adjust for group
+ss$GroupNumber = as.factor(ss$GroupNumber)
+res = lapply(unique(ss$Stage), function(stage) {
+  temp = subset(ss, Stage == stage)
+  temp = temp %>% arrange(Light)
+  # fit separate models to the Light and Dark phases
+  m1 = lm(value ~ as.factor(GroupNumber), temp[temp$Light == 'Dark',])
+  m2 = lm(value ~ as.factor(GroupNumber), temp[temp$Light == 'Light',])
+  temp$resid = c(as.numeric(m1$residuals), as.numeric(m2$residuals))
+  temp$groupIntercept = c(rep(m1$coefficient[1], length(m1$fitted.values)), 
+                        rep(m2$coefficient[1], length(m2$fitted.values)))
+  temp$value_adjusted = temp$resid + temp$groupIntercept
+  return(temp)
+})
+ss = do.call('rbind', res)
+```
+
+### Plot
+```{r, fig.width = 5, fig.height = 3.5}
+p = ggplot(ss, aes(x = CumNormDavidScore, y = value_adjusted, fill = Rank, color = Rank)) +
+  geom_smooth(method = 'lm', se = F, col = 'grey', aes(group = 1), lty = 'dashed') +
+  geom_point(size = 2, position = position_dodge(0), col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('Dominance') + ylab('Mean REM Episode Duration [min]') +
+  # facet_wrap(~Light*Stage, ncol = 3) +
+  facet_grid(Light~Stage) +
+  obj$theme + theme(legend.position = 'none', 
+                    plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+p
+
+if(saveFigures) {ggsave('../figures/2E_Rank_x_Stage_x_meanDrem.eps', width = 5, height = 3.5, dpi = 1200)}
+# embed_fonts('papers/sleep/figures/Rank_x_Stage_x_meanDrem.pdf')
+```
+
+Boxplots
+```{r, fig.width = 3.5, fig.height = 3.5}
+p2 = ggplot(ss, aes(x = RankBinary, y = value_adjusted, fill = Rank)) +
+  geom_boxplot(width = 0.5, alpha = 1,  outlier.shape = NA, fill = 'grey90', color = 'grey') +
+  geom_point(size = 2, col = 'grey20', pch = 21) +
+  scale_fill_manual(values = rankColors4) +
+  scale_color_manual(values = rankColors4) +
+  xlab('Dominance') + ylab('Mean REM Episode Duration [min]') +
+  facet_wrap(Light~Stage, ncol = 3) +
+  obj$theme + theme(legend.position = 'none', 
+                    axis.text.y = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "cm"))
+p2
+```
+
+### Stats
+
+Number of mice:
+```{r}
+length(unique(ss$MouseNumber))
+```
+
+Summary:
+```{r}
+ss %>% group_by(Light, RankBinary) %>% 
+  dplyr::summarize(
+    n = n(), 
+    M = mean(value, na.rm = T), 
+    sd = sd(value, na.rm = T)
+  )
+```
+
+#### Shapiro-Wilk test 
+
+```{r}
+ss %>% group_by(Light, Stage, RankBinary) %>% nest() %>% 
+  mutate(SW = map(data, function(d) shapiro.test(d$value)), 
+         tSW = map(SW, broom::tidy)) %>% select(-data, -SW) %>% unnest()
+```
+
+> Normality is not violated in any group
+
+#### Levene's Test
+```{r}
+knitr::kable(car::leveneTest(value ~ RankBinary * Light * Stage, ss))
+```
+
+> Groupwise variances are not heteroscedastic (although a trend exists)
+
+#### Continuous predictor
+```{r}
+ss$GroupNumber = as.factor(ss$GroupNumber)
+ss$MouseNumber = as.factor(ss$MouseNumber)
+ss$RankBinary = as.factor(ss$RankBinary)
+m = lme(value ~ CumNormDavidScore * Stage * Light,
+    random = ~1|GroupNumber/MouseNumber, data = ss, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+##### Dark Phase
+```{r}
+m = lme(value ~ CumNormDavidScore * Stage,
+    random = ~1|GroupNumber/MouseNumber, data = subset(ss, Light == 'Dark'), # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+##### Light Phase
+```{r}
+m = lme(value ~ CumNormDavidScore * Stage,
+    random = ~1|GroupNumber/MouseNumber, data = subset(ss, Light == 'Light'), # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+#### Binary predictor
+```{r}
+m = lme(value ~ RankBinary * Stage * Light,
+    random = ~1|GroupNumber/MouseNumber, data = ss, # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+##### Dark Phase
+```{r}
+m = lme(value ~ RankBinary * Stage,
+    random = ~1|GroupNumber/MouseNumber, data = subset(ss, Light == 'Dark'), # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+##### Light Phase
+```{r}
+m = lme(value ~ RankBinary * Stage,
+    random = ~1|GroupNumber/MouseNumber, data = subset(ss, Light == 'Light'), # MouseNumber is nested in GroupNumber
+    method= "ML")
+anova(m)
+```
+
+
+
+
