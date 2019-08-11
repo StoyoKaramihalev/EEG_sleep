@@ -18,7 +18,7 @@ editor_options:
 ---
 ```{r setup, include=F}
 knitr::opts_chunk$set(fig.width = 7, fig.height = 4, fig.align = 'center', 
-                      message = F, echo = T, warning = F) 
+                      message = F, echo = F, warning = F) 
 
 library(tidyverse)
 libraries = c("ggthemes", "R.matlab", "gridExtra", 'data.table', 'extrafont', 'broom', 
@@ -79,7 +79,7 @@ if(saveFigures) {ggsave('../figures/1D_Group_hypnogram.eps', width = 5.5, height
 
 ***
 
-## 1E
+## Figure 1E
 
 Subsetting vigilance data
 
@@ -209,7 +209,7 @@ summary(m)
 
 ***
 
-## 1F
+## Figure 1F
 
 > "PseudoCausality" over time
 
@@ -373,7 +373,7 @@ summary(m)
 
 # Figure 2
 
-## 2A
+## Figure 2A
 
 > Sleep Types [%] Stacked
 
@@ -472,7 +472,7 @@ length(unique(ss$MouseNumber))
 
 ***
 
-## 2B 
+## Figure 2B 
 
 > REM [%] x Rank - Baseline 
 
@@ -619,7 +619,7 @@ anova(m)
 <!-- EMAtools::lme.dscore(m, ss, 'nlme') -->
 
 
-## 2C
+## Figure 2C
 
 > SWA x Rank - Baseline 
 
@@ -853,7 +853,7 @@ plot_grid(legend_b, bottom_row, ncol = 1, rel_heights = c(0.1, 1))
 
 
 
-## 2D
+## Figure 2D
 
 > Fragmentation x Rank - baseline
 
@@ -1018,7 +1018,7 @@ anova(m)
 
 
 
-## 2E 
+## Figure 2E 
 
 > REM Duration x Rank x Stage
 
