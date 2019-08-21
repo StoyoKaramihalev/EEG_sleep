@@ -3,6 +3,8 @@ title: "EEG_Sleep Figures"
 author: "Stoyo Karamihalev"
 output:
   html_document:
+    includes:
+      in_header: GA_script.html
     code_folding: hide
     css: style.css
     df_print: paged
