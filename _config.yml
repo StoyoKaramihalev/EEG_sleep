@@ -1,7 +1,3 @@
 theme: jekyll-theme-minimal
 logo: /img/arena_EEG_2.png
-output:
-  html_document:
-    includes:
-      in_header: GA_script.html
-
+google_analytics: UA-146140762-1
