@@ -1,5 +1,5 @@
 ---
-title: "EEG_Sleep Figures"
+title: "EEG Sleep Figures"
 author: "Stoyo Karamihalev"
 output:
   html_document:
