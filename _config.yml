@@ -1,2 +1,5 @@
 theme: jekyll-theme-minimal
 logo: /img/arena_EEG_2.png
+html_document:
+    includes:
+      in_header: GA_script.html
