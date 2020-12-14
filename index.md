@@ -1,9 +1,7 @@
 ## Introduction
 This repository holds the analyses and plots for the manuscript *"Social context and dominance status contribute to sleep patterns and quality in groups of freely-moving mice"*. 
 
-An early version of the manuscript is currently available on bioRxiv:
-
-[Karamihalev, S., Flachskamm, C., Kimura, M., & Chen, A. (2019). Social context and dominance status contribute to sleep patterns and quality in groups of freely-moving mice. bioRxiv, 529669.](https://www.biorxiv.org/content/10.1101/529669v1)
+[Karamihalev, S., Flachskamm, C., Eren, N., Kimura, M., & Chen, A. (2019). Social context and dominance status contribute to sleep patterns and quality in groups of freely-moving mice. Scientific reports, 9(1), 1-8.](https://www.nature.com/articles/s41598-019-51375-7)
 
 ## Analysis and Figures
 The analyses and figures for this manuscript are available as a r-markdown document under [figures.Rmd](https://stoyokaramihalev.github.io/EEG_sleep/figures.html)
